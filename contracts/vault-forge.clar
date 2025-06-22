@@ -295,3 +295,76 @@
     )
   )
 )
+
+;; Loan Repayment Processing
+;; Handles loan closure with interest settlement
+(define-public (repay-loan
+    (loan-id uint)
+    (amount uint)
+  )
+  (begin
+    ;; Primary loan ID validation
+    (asserts! (validate-loan-id loan-id) ERR-INVALID-LOAN-ID)
+    (let (
+        (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+        (interest-owed (calculate-interest (get loan-amount loan) (get interest-rate loan)
+          (- stacks-block-height (get last-interest-calc loan))
+        ))
+        (total-owed (+ (get loan-amount loan) interest-owed))
+      )
+      (begin
+        ;; Loan state and authorization checks
+        (asserts! (is-eq (get status loan) "active") ERR-LOAN-NOT-ACTIVE)
+        (asserts! (is-eq (get borrower loan) tx-sender) ERR-NOT-AUTHORIZED)
+        (asserts! (>= amount total-owed) ERR-INVALID-AMOUNT)
+        ;; Process loan closure
+        (map-set loans { loan-id: loan-id }
+          (merge loan {
+            status: "repaid",
+            last-interest-calc: stacks-block-height,
+          })
+        )
+        ;; Release collateral back to borrower
+        (var-set total-btc-locked
+          (- (var-get total-btc-locked) (get collateral-amount loan))
+        )
+        ;; Clean up user loan tracking
+        (match (map-get? user-loans { user: tx-sender })
+          existing-loans (ok (map-set user-loans { user: tx-sender } { active-loans: (filter not-equal-loan-id (get active-loans existing-loans)) }))
+          (ok false)
+        )
+      )
+    )
+  )
+)
+
+;;     READ-ONLY FUNCTIONS
+
+;; Loan Information Retrieval
+;; Returns comprehensive loan details for specified ID
+(define-read-only (get-loan-details (loan-id uint))
+  (map-get? loans { loan-id: loan-id })
+)
+
+;; User Portfolio Query
+;; Retrieves all active loans for specified user
+(define-read-only (get-user-loans (user principal))
+  (map-get? user-loans { user: user })
+)
+
+;; Protocol Analytics Dashboard
+;; Returns current platform operational metrics
+(define-read-only (get-platform-stats)
+  {
+    total-btc-locked: (var-get total-btc-locked),
+    total-loans-issued: (var-get total-loans-issued),
+    minimum-collateral-ratio: (var-get minimum-collateral-ratio),
+    liquidation-threshold: (var-get liquidation-threshold),
+  }
+)
+
+;; Supported Assets Registry
+;; Returns list of protocol-supported collateral assets
+(define-read-only (get-valid-assets)
+  VALID-ASSETS
+)
